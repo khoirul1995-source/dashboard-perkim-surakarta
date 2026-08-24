@@ -884,7 +884,7 @@ with tab_peta:
         gdf_kec = admin["Kecamatan"]
         label_field = "Kecamatan" if "Kecamatan" in gdf_kec.columns else gdf_kec.columns[0]
         def style_kec(feature):
-            return {"color": "#111827", "weight": 2.5, "opacity": 0.9, "fillOpacity": 0, "dashArray": "12, 6, 2, 6"}
+            return {"color": "#111827", "weight": 5, "opacity": 0.9, "fillOpacity": 0, "dashArray": "12, 6, 2, 6"}
         fg_kec = folium.FeatureGroup(name="Batas Kecamatan", show=True)
         folium.GeoJson(gdf_kec.__geo_interface__, style_function=style_kec,
                        tooltip=folium.GeoJsonTooltip(fields=[label_field], aliases=["Kecamatan:"], sticky=True)).add_to(fg_kec)
@@ -901,7 +901,7 @@ with tab_peta:
         gdf_kel = admin["Kelurahan"]
         label_field = "Kelurahan" if "Kelurahan" in gdf_kel.columns else gdf_kel.columns[0]
         def style_kel(feature):
-            return {"color": "#4b5563", "weight": 1.5, "opacity": 0.85, "fillOpacity": 0, "dashArray": "10, 4, 2, 4, 2, 4, 2, 4"}
+            return {"color": "#4b5563", "weight": 3.5, "opacity": 0.85, "fillOpacity": 0, "dashArray": "10, 4, 2, 4, 2, 4, 2, 4"}
         fg_kel = folium.FeatureGroup(name="Batas Kelurahan", show=False)
         folium.GeoJson(gdf_kel.__geo_interface__, style_function=style_kel,
                        tooltip=folium.GeoJsonTooltip(fields=[label_field], aliases=["Kelurahan:"], sticky=True)).add_to(fg_kel)

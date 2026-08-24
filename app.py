@@ -94,8 +94,8 @@ ADMIN_FILES = {
 }
 
 LAYER_COLORS = {
-    "Jaling": "#1d4ed8",
-    "Draling": "#059669",
+    "Jaling": "#f97316",
+    "Draling": "#1d4ed8",
     "Kawasan": "#d97706",
     "RTLH": "#dc2626",
 }
@@ -173,23 +173,37 @@ def clear_cache_and_rerun():
 # ============================================================
 # FUNGSI FILTER
 # ============================================================
-def apply_filters(gdf, selected_tahun, selected_kelurahan, search_text):
-    """Terapkan filter Tahun, Kelurahan, dan teks pencarian."""
+def apply_wilayah_filter(gdf, kel_to_kec, selected_kecamatan, selected_kelurahan):
+    """Terapkan filter wilayah: Kecamatan (via peta kelurahan->kecamatan) dan/atau Kelurahan."""
     if gdf is None or len(gdf) == 0:
         return gdf
     filtered = gdf.copy()
-    if selected_tahun != "Semua Tahun" and "Tahun Anggaran" in filtered.columns:
-        filtered = filtered[filtered["Tahun Anggaran"].astype(str) == selected_tahun]
+    kel_col = get_kelurahan_col(filtered)
+    if not kel_col:
+        return filtered
+    if selected_kecamatan and selected_kecamatan != "Semua Kecamatan":
+        filtered = filtered[
+            filtered[kel_col].astype(str).str.strip().map(lambda k: kel_to_kec.get(k) == selected_kecamatan)
+        ]
     if selected_kelurahan:
-        kel_col = next((c for c in ["Kelurahan", "KELURAHAN"] if c in filtered.columns), None)
-        if kel_col:
-            filtered = filtered[filtered[kel_col].astype(str).str.strip().isin(selected_kelurahan)]
-    if search_text:
-        search_cols = [c for c in filtered.columns if c not in ["geometry", "ID"]]
-        mask = pd.Series(False, index=filtered.index)
-        for c in search_cols:
-            mask = mask | filtered[c].astype(str).str.contains(search_text, case=False, na=False)
-        filtered = filtered[mask]
+        filtered = filtered[filtered[kel_col].astype(str).str.strip().isin(selected_kelurahan)]
+    return filtered
+
+
+def apply_kegiatan_filter(gdf, sel_kelurahan, sel_pekerjaan, sel_tahun, sel_penyedia):
+    """Terapkan filter kegiatan dinamis: Kelurahan, Nama Pekerjaan, Tahun Anggaran, Penyedia."""
+    if gdf is None or len(gdf) == 0:
+        return gdf
+    filtered = gdf.copy()
+    kel_col = get_kelurahan_col(filtered)
+    if sel_kelurahan and kel_col:
+        filtered = filtered[filtered[kel_col].astype(str).str.strip().isin(sel_kelurahan)]
+    if sel_pekerjaan and "Nama Pekerjaan" in filtered.columns:
+        filtered = filtered[filtered["Nama Pekerjaan"].astype(str).str.strip().isin(sel_pekerjaan)]
+    if sel_tahun and sel_tahun != "Semua Tahun" and "Tahun Anggaran" in filtered.columns:
+        filtered = filtered[filtered["Tahun Anggaran"].astype(str) == sel_tahun]
+    if sel_penyedia and "Penyedia" in filtered.columns:
+        filtered = filtered[filtered["Penyedia"].astype(str).str.strip().isin(sel_penyedia)]
     return filtered
 
 
@@ -227,7 +241,10 @@ def gdf_for_map(gdf):
     for c in out.columns:
         if c == "geometry":
             continue
-        out[c] = out[c].apply(lambda v: "-" if pd.isna(v) else str(v).strip() or "-")
+        if c == "Harga":
+            out[c] = out[c].apply(lambda v: format_rp(v) if pd.notna(v) else "-")
+        else:
+            out[c] = out[c].apply(lambda v: "-" if pd.isna(v) else str(v).strip() or "-")
     return out
 
 
@@ -381,14 +398,10 @@ def chart_rtlh_per_kelurahan(gdf):
 
 
 def format_rp(nilai):
-    """Format angka ke Rupiah singkat."""
+    """Format angka ke Rupiah penuh, contoh: Rp 1.250.000."""
     try:
         n = float(nilai)
-        if n >= 1_000_000_000:
-            return f"Rp {n/1_000_000_000:.1f} M"
-        if n >= 1_000_000:
-            return f"Rp {n/1_000_000:.1f} jt"
-        return f"Rp {n:,.0f}"
+        return "Rp " + f"{n:,.0f}".replace(",", ".")
     except Exception:
         return "-"
 
@@ -581,36 +594,91 @@ with st.sidebar:
             unsafe_allow_html=True,
         )
 
-    st.markdown("### 🔍 Pencarian")
-    search_text = st.text_input("Cari", placeholder="Ketik kata kunci lalu Enter...", label_visibility="collapsed")
+    st.markdown("### 📍 Filter Wilayah")
 
-    st.markdown("---")
-    st.markdown("### 📅 Tahun")
-    all_tahun = set()
-    for gdf in data.values():
-        if gdf is not None and "Tahun Anggaran" in gdf.columns:
-            all_tahun.update(gdf["Tahun Anggaran"].dropna().astype(str).unique())
-    tahun_options = ["Semua Tahun"] + sorted(list(all_tahun), reverse=True)
-    selected_tahun = st.selectbox("Tahun", options=tahun_options, label_visibility="collapsed")
+    # --- Peta Kelurahan -> Kecamatan (dari batas administrasi) ---
+    kel_to_kec = {}
+    gdf_kel_admin = admin.get("Kelurahan")
+    if gdf_kel_admin is not None and len(gdf_kel_admin) > 0 and "Kecamatan" in gdf_kel_admin.columns:
+        for _, r in gdf_kel_admin.iterrows():
+            k = str(r.get("Kelurahan", "")).strip()
+            kc = str(r.get("Kecamatan", "")).strip()
+            if k:
+                kel_to_kec[k] = kc
 
-    st.markdown("---")
-    st.markdown("### 📍 Kelurahan")
-    all_kelurahan = set()
-    for gdf in data.values():
-        if gdf is None:
-            continue
-        for col in ["Kelurahan", "KELURAHAN"]:
-            if col in gdf.columns:
-                all_kelurahan.update(gdf[col].dropna().astype(str).str.strip().unique())
-    kelurahan_options = sorted([k for k in all_kelurahan if k and k.lower() != "nan"])
-    selected_kelurahan = st.multiselect("Kelurahan", options=kelurahan_options, default=[], label_visibility="collapsed")
+    kecamatan_options = ["Semua Kecamatan"] + sorted({v for v in kel_to_kec.values() if v})
+    selected_kecamatan = st.selectbox("Kecamatan", options=kecamatan_options, label_visibility="collapsed")
 
-    st.markdown("---")
-    st.markdown("### 🗂️ Layer Kegiatan")
+    if selected_kecamatan != "Semua Kecamatan":
+        kelurahan_wilayah_options = sorted([k for k, v in kel_to_kec.items() if v == selected_kecamatan])
+    else:
+        kelurahan_wilayah_options = sorted(kel_to_kec.keys())
+    selected_kelurahan_wilayah = st.multiselect(
+        "Kelurahan", options=kelurahan_wilayah_options, default=[],
+        placeholder="Semua Kelurahan", label_visibility="collapsed",
+    )
+
+    st.markdown("**Layer**")
     show_jaling = st.checkbox("Jalan Lingkungan", value=True)
     show_draling = st.checkbox("Drainase Lingkungan", value=True)
     show_kawasan = st.checkbox("Penataan Kawasan", value=True)
     show_rtlh = st.checkbox("RTLH", value=True)
+
+    st.markdown("---")
+    st.markdown("### 🗂️ Filter Kegiatan")
+
+    layer_kegiatan_label = st.selectbox("Layer Kegiatan", options=list(LAYER_LABELS.values()), label_visibility="collapsed")
+    label_to_key = {v: k for k, v in LAYER_LABELS.items()}
+    target_key = label_to_key[layer_kegiatan_label]
+
+    _base = apply_wilayah_filter(data.get(target_key), kel_to_kec, selected_kecamatan, selected_kelurahan_wilayah)
+    _kel_col = get_kelurahan_col(_base) if _base is not None else None
+
+    # --- Kelurahan (dinamis, dari data layer terpilih) ---
+    if _base is not None and _kel_col:
+        kelurahan_kegiatan_options = sorted([
+            k for k in _base[_kel_col].dropna().astype(str).str.strip().unique() if k and k.lower() != "nan"
+        ])
+    else:
+        kelurahan_kegiatan_options = []
+    sel_kelurahan_kegiatan = st.multiselect("Kelurahan (kegiatan)", options=kelurahan_kegiatan_options, default=[],
+                                             placeholder="Semua Kelurahan")
+    _step1 = _base
+    if _step1 is not None and _kel_col and sel_kelurahan_kegiatan:
+        _step1 = _step1[_step1[_kel_col].astype(str).str.strip().isin(sel_kelurahan_kegiatan)]
+
+    # --- Nama Pekerjaan (dinamis) ---
+    if _step1 is not None and "Nama Pekerjaan" in _step1.columns:
+        pekerjaan_options = sorted([
+            p for p in _step1["Nama Pekerjaan"].dropna().astype(str).str.strip().unique() if p and p.lower() != "nan"
+        ])
+        sel_pekerjaan = st.multiselect("Nama Pekerjaan", options=pekerjaan_options, default=[], placeholder="Semua Pekerjaan")
+    else:
+        sel_pekerjaan = []
+    _step2 = _step1
+    if _step2 is not None and sel_pekerjaan and "Nama Pekerjaan" in _step2.columns:
+        _step2 = _step2[_step2["Nama Pekerjaan"].astype(str).str.strip().isin(sel_pekerjaan)]
+
+    # --- Tahun Anggaran (dinamis) ---
+    if _step2 is not None and "Tahun Anggaran" in _step2.columns:
+        tahun_options = ["Semua Tahun"] + sorted(
+            _step2["Tahun Anggaran"].dropna().astype(str).unique(), reverse=True
+        )
+        sel_tahun_kegiatan = st.selectbox("Tahun Anggaran", options=tahun_options)
+    else:
+        sel_tahun_kegiatan = "Semua Tahun"
+    _step3 = _step2
+    if _step3 is not None and sel_tahun_kegiatan != "Semua Tahun" and "Tahun Anggaran" in _step3.columns:
+        _step3 = _step3[_step3["Tahun Anggaran"].astype(str) == sel_tahun_kegiatan]
+
+    # --- Penyedia (dinamis) ---
+    if _step3 is not None and "Penyedia" in _step3.columns:
+        penyedia_options = sorted([
+            p for p in _step3["Penyedia"].dropna().astype(str).str.strip().unique() if p and p.lower() != "nan"
+        ])
+        sel_penyedia = st.multiselect("Penyedia", options=penyedia_options, default=[], placeholder="Semua Penyedia")
+    else:
+        sel_penyedia = []
 
     st.markdown("---")
     if st.button("↺ Reset Filter"):
@@ -628,10 +696,16 @@ layer_visibility = {
 
 filtered_data = {}
 for name, gdf in data.items():
-    if layer_visibility.get(name, False):
-        filtered_data[name] = apply_filters(gdf, selected_tahun, selected_kelurahan, search_text)
-    else:
+    if not layer_visibility.get(name, False):
         filtered_data[name] = gpd.GeoDataFrame()
+        continue
+    wilayah_g = apply_wilayah_filter(gdf, kel_to_kec, selected_kecamatan, selected_kelurahan_wilayah)
+    if name == target_key:
+        filtered_data[name] = apply_kegiatan_filter(
+            wilayah_g, sel_kelurahan_kegiatan, sel_pekerjaan, sel_tahun_kegiatan, sel_penyedia
+        )
+    else:
+        filtered_data[name] = wilayah_g
 
 # ============================================================
 # TAB
@@ -656,14 +730,10 @@ with tab_peta:
     if all_geoms:
         combined = pd.concat(all_geoms, ignore_index=True)
         bounds = combined.total_bounds
-        if search_text and len(combined) > 0:
-            fit_bounds = [[bounds[1], bounds[0]], [bounds[3], bounds[2]]]
-            center_lat = (bounds[1] + bounds[3]) / 2
-            center_lon = (bounds[0] + bounds[2]) / 2
-            zoom_start = 16 if len(combined) <= 3 else 15
-        else:
-            center_lat = (bounds[1] + bounds[3]) / 2
-            center_lon = (bounds[0] + bounds[2]) / 2
+        fit_bounds = [[bounds[1], bounds[0]], [bounds[3], bounds[2]]]
+        center_lat = (bounds[1] + bounds[3]) / 2
+        center_lon = (bounds[0] + bounds[2]) / 2
+        zoom_start = 16 if len(combined) <= 3 else 13
     elif len(admin.get("Kecamatan", [])) > 0:
         bounds = admin["Kecamatan"].total_bounds
         center_lat = (bounds[1] + bounds[3]) / 2

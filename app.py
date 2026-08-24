@@ -33,6 +33,22 @@ st.markdown("""
     [data-testid="stHorizontalBlock"] {
         overflow: visible !important;
     }
+
+    /* ===== Tampilan Mobile: sidebar jadi panel mengambang, tidak menutup penuh ===== */
+    @media (max-width: 640px) {
+        section[data-testid="stSidebar"] {
+            width: 86vw !important;
+            max-width: 320px !important;
+            box-shadow: 3px 0 24px rgba(0,0,0,0.45);
+            border-radius: 0 18px 18px 0;
+        }
+        section[data-testid="stSidebar"] > div {
+            padding-top: 0.5rem;
+        }
+        .block-container {padding-top: 3.5rem; padding-left: 0.75rem; padding-right: 0.75rem;}
+        .app-header h1 { font-size: 1.25rem; }
+        .app-header p { font-size: 0.78rem; }
+    }
     .app-header {
         display: flex;
         align-items: center;
@@ -97,7 +113,7 @@ LAYER_COLORS = {
     "Jaling": "#dc2626",
     "Draling": "#1d4ed8",
     "Kawasan": "#d97706",
-    "RTLH": "#A0522D",
+    "RTLH": "#78350f",
 }
 
 LAYER_LABELS = {
@@ -191,7 +207,7 @@ def apply_wilayah_filter(gdf, kel_to_kec, selected_kecamatan, selected_kelurahan
 
 
 def apply_kegiatan_filter(gdf, sel_kelurahan, sel_pekerjaan, sel_tahun, sel_penyedia):
-    """Terapkan filter kegiatan dinamis: Kelurahan, Nama Pekerjaan, Tahun Anggaran, Penyedia."""
+    """Terapkan filter kegiatan (multi-pilih): Kelurahan, Nama Pekerjaan, Tahun Anggaran, Penyedia."""
     if gdf is None or len(gdf) == 0:
         return gdf
     filtered = gdf.copy()
@@ -200,8 +216,8 @@ def apply_kegiatan_filter(gdf, sel_kelurahan, sel_pekerjaan, sel_tahun, sel_peny
         filtered = filtered[filtered[kel_col].astype(str).str.strip().isin(sel_kelurahan)]
     if sel_pekerjaan and "Nama Pekerjaan" in filtered.columns:
         filtered = filtered[filtered["Nama Pekerjaan"].astype(str).str.strip().isin(sel_pekerjaan)]
-    if sel_tahun and sel_tahun != "Semua Tahun" and "Tahun Anggaran" in filtered.columns:
-        filtered = filtered[filtered["Tahun Anggaran"].astype(str) == sel_tahun]
+    if sel_tahun and "Tahun Anggaran" in filtered.columns:
+        filtered = filtered[filtered["Tahun Anggaran"].astype(str).isin(sel_tahun)]
     if sel_penyedia and "Penyedia" in filtered.columns:
         filtered = filtered[filtered["Penyedia"].astype(str).str.strip().isin(sel_penyedia)]
     return filtered
@@ -406,6 +422,15 @@ def format_rp(nilai):
         return "-"
 
 
+def format_num(nilai):
+    """Format angka dengan pemisah ribuan titik, contoh: 12.500."""
+    try:
+        n = float(nilai)
+        return f"{n:,.0f}".replace(",", ".")
+    except Exception:
+        return "0"
+
+
 # ============================================================
 # KONTROL TRANSPARANSI DI DALAM PETA (pojok kanan bawah)
 # ============================================================
@@ -581,6 +606,35 @@ admin = load_admin_boundaries()
 # ============================================================
 # SIDEBAR
 # ============================================================
+WILAYAH_DEFAULT = {
+    "kecamatan": "Semua Kecamatan",
+    "kelurahan": [],
+    "show_jaling": True,
+    "show_draling": True,
+    "show_kawasan": True,
+    "show_rtlh": True,
+}
+KEGIATAN_DEFAULT = {
+    "target_key": "Jaling",
+    "kelurahan": [],
+    "pekerjaan": [],
+    "tahun": [],
+    "penyedia": [],
+}
+
+if "wilayah_applied" not in st.session_state:
+    st.session_state.wilayah_applied = dict(WILAYAH_DEFAULT)
+if "kegiatan_applied" not in st.session_state:
+    st.session_state.kegiatan_applied = dict(KEGIATAN_DEFAULT)
+
+# Terapkan isolasi layer (dari klik Filter Kegiatan run sebelumnya) SEBELUM checkbox dirender
+if "_isolate_layer_pending" in st.session_state:
+    _iso_key = st.session_state.pop("_isolate_layer_pending")
+    st.session_state["w_show_jaling"] = (_iso_key == "Jaling")
+    st.session_state["w_show_draling"] = (_iso_key == "Draling")
+    st.session_state["w_show_kawasan"] = (_iso_key == "Kawasan")
+    st.session_state["w_show_rtlh"] = (_iso_key == "RTLH")
+
 with st.sidebar:
     _logo = Path(__file__).parent / "assets" / "logo_surakarta.png"
     if _logo.exists():
@@ -594,6 +648,9 @@ with st.sidebar:
             unsafe_allow_html=True,
         )
 
+    # ============================================================
+    # FILTER WILAYAH
+    # ============================================================
     st.markdown("### 📍 Filter Wilayah")
 
     # --- Peta Kelurahan -> Kecamatan (dari batas administrasi) ---
@@ -607,102 +664,173 @@ with st.sidebar:
                 kel_to_kec[k] = kc
 
     kecamatan_options = ["Semua Kecamatan"] + sorted({v for v in kel_to_kec.values() if v})
-    selected_kecamatan = st.selectbox("Kecamatan", options=kecamatan_options, label_visibility="collapsed")
+    st.selectbox("Kecamatan", options=kecamatan_options, key="w_kecamatan", label_visibility="collapsed")
+    _live_kecamatan = st.session_state.get("w_kecamatan", "Semua Kecamatan")
 
-    if selected_kecamatan != "Semua Kecamatan":
-        kelurahan_wilayah_options = sorted([k for k, v in kel_to_kec.items() if v == selected_kecamatan])
+    if _live_kecamatan != "Semua Kecamatan":
+        kelurahan_wilayah_options = sorted([k for k, v in kel_to_kec.items() if v == _live_kecamatan])
     else:
         kelurahan_wilayah_options = sorted(kel_to_kec.keys())
-    selected_kelurahan_wilayah = st.multiselect(
-        "Kelurahan", options=kelurahan_wilayah_options, default=[],
+    st.multiselect(
+        "Kelurahan", options=kelurahan_wilayah_options, key="w_kelurahan_wilayah",
         placeholder="Semua Kelurahan", label_visibility="collapsed",
     )
+    _live_kelurahan_wilayah = st.session_state.get("w_kelurahan_wilayah", [])
 
     st.markdown("**Layer**")
-    show_jaling = st.checkbox("Jalan Lingkungan", value=True)
-    show_draling = st.checkbox("Drainase Lingkungan", value=True)
-    show_kawasan = st.checkbox("Penataan Kawasan", value=True)
-    show_rtlh = st.checkbox("RTLH", value=True)
+    st.session_state.setdefault("w_show_jaling", True)
+    st.session_state.setdefault("w_show_draling", True)
+    st.session_state.setdefault("w_show_kawasan", True)
+    st.session_state.setdefault("w_show_rtlh", True)
+    st.checkbox("Jalan Lingkungan", key="w_show_jaling")
+    st.checkbox("Drainase Lingkungan", key="w_show_draling")
+    st.checkbox("Penataan Kawasan", key="w_show_kawasan")
+    st.checkbox("RTLH", key="w_show_rtlh")
+
+    col_wf1, col_wf2 = st.columns(2)
+    with col_wf1:
+        filter_wilayah_clicked = st.button("🔍 Filter", key="btn_filter_wilayah", use_container_width=True)
+    with col_wf2:
+        reset_wilayah_clicked = st.button("↺ Reset", key="btn_reset_wilayah", use_container_width=True)
+
+    if filter_wilayah_clicked:
+        st.session_state.wilayah_applied = {
+            "kecamatan": _live_kecamatan,
+            "kelurahan": _live_kelurahan_wilayah,
+            "show_jaling": st.session_state.get("w_show_jaling", True),
+            "show_draling": st.session_state.get("w_show_draling", True),
+            "show_kawasan": st.session_state.get("w_show_kawasan", True),
+            "show_rtlh": st.session_state.get("w_show_rtlh", True),
+        }
+
+    if reset_wilayah_clicked:
+        for k in ["w_kecamatan", "w_kelurahan_wilayah", "w_show_jaling", "w_show_draling", "w_show_kawasan", "w_show_rtlh"]:
+            if k in st.session_state:
+                del st.session_state[k]
+        st.session_state.wilayah_applied = dict(WILAYAH_DEFAULT)
+        st.rerun()
 
     st.markdown("---")
+
+    # ============================================================
+    # FILTER KEGIATAN
+    # ============================================================
     st.markdown("### 🗂️ Filter Kegiatan")
 
-    layer_kegiatan_label = st.selectbox("Layer Kegiatan", options=list(LAYER_LABELS.values()), label_visibility="collapsed")
+    st.selectbox("Layer Kegiatan", options=list(LAYER_LABELS.values()), key="w_layer_kegiatan", label_visibility="collapsed")
     label_to_key = {v: k for k, v in LAYER_LABELS.items()}
-    target_key = label_to_key[layer_kegiatan_label]
+    _live_target_label = st.session_state.get("w_layer_kegiatan", list(LAYER_LABELS.values())[0])
+    _live_target_key = label_to_key[_live_target_label]
 
-    _base = apply_wilayah_filter(data.get(target_key), kel_to_kec, selected_kecamatan, selected_kelurahan_wilayah)
+    # Basis data kegiatan mengikuti filter Wilayah yang SUDAH diterapkan
+    _base = apply_wilayah_filter(
+        data.get(_live_target_key), kel_to_kec,
+        st.session_state.wilayah_applied["kecamatan"], st.session_state.wilayah_applied["kelurahan"],
+    )
     _kel_col = get_kelurahan_col(_base) if _base is not None else None
 
-    # --- Kelurahan (dinamis, dari data layer terpilih) ---
+    # --- Kelurahan (dinamis, multi-pilih) ---
     if _base is not None and _kel_col:
         kelurahan_kegiatan_options = sorted([
             k for k in _base[_kel_col].dropna().astype(str).str.strip().unique() if k and k.lower() != "nan"
         ])
     else:
         kelurahan_kegiatan_options = []
-    sel_kelurahan_kegiatan = st.multiselect("Kelurahan (kegiatan)", options=kelurahan_kegiatan_options, default=[],
-                                             placeholder="Semua Kelurahan")
+    st.multiselect("Kelurahan (kegiatan)", options=kelurahan_kegiatan_options, key="w_kelurahan_kegiatan",
+                    placeholder="Semua Kelurahan")
+    _live_kel_kegiatan = st.session_state.get("w_kelurahan_kegiatan", [])
     _step1 = _base
-    if _step1 is not None and _kel_col and sel_kelurahan_kegiatan:
-        _step1 = _step1[_step1[_kel_col].astype(str).str.strip().isin(sel_kelurahan_kegiatan)]
+    if _step1 is not None and _kel_col and _live_kel_kegiatan:
+        _step1 = _step1[_step1[_kel_col].astype(str).str.strip().isin(_live_kel_kegiatan)]
 
-    # --- Nama Pekerjaan (dinamis) ---
+    # --- Nama Pekerjaan (dinamis, multi-pilih) ---
     if _step1 is not None and "Nama Pekerjaan" in _step1.columns:
         pekerjaan_options = sorted([
             p for p in _step1["Nama Pekerjaan"].dropna().astype(str).str.strip().unique() if p and p.lower() != "nan"
         ])
-        sel_pekerjaan = st.multiselect("Nama Pekerjaan", options=pekerjaan_options, default=[], placeholder="Semua Pekerjaan")
-    else:
-        sel_pekerjaan = []
+        st.multiselect("Nama Pekerjaan", options=pekerjaan_options, key="w_pekerjaan", placeholder="Semua Pekerjaan")
+    _live_pekerjaan = st.session_state.get("w_pekerjaan", []) if (_step1 is not None and "Nama Pekerjaan" in _step1.columns) else []
     _step2 = _step1
-    if _step2 is not None and sel_pekerjaan and "Nama Pekerjaan" in _step2.columns:
-        _step2 = _step2[_step2["Nama Pekerjaan"].astype(str).str.strip().isin(sel_pekerjaan)]
+    if _step2 is not None and _live_pekerjaan and "Nama Pekerjaan" in _step2.columns:
+        _step2 = _step2[_step2["Nama Pekerjaan"].astype(str).str.strip().isin(_live_pekerjaan)]
 
-    # --- Tahun Anggaran (dinamis) ---
+    # --- Tahun Anggaran (dinamis, multi-pilih) ---
     if _step2 is not None and "Tahun Anggaran" in _step2.columns:
-        tahun_options = ["Semua Tahun"] + sorted(
-            _step2["Tahun Anggaran"].dropna().astype(str).unique(), reverse=True
-        )
-        sel_tahun_kegiatan = st.selectbox("Tahun Anggaran", options=tahun_options)
-    else:
-        sel_tahun_kegiatan = "Semua Tahun"
+        tahun_options = sorted(_step2["Tahun Anggaran"].dropna().astype(str).unique(), reverse=True)
+        st.multiselect("Tahun Anggaran", options=tahun_options, key="w_tahun_kegiatan", placeholder="Semua Tahun")
+    _live_tahun = st.session_state.get("w_tahun_kegiatan", []) if (_step2 is not None and "Tahun Anggaran" in _step2.columns) else []
     _step3 = _step2
-    if _step3 is not None and sel_tahun_kegiatan != "Semua Tahun" and "Tahun Anggaran" in _step3.columns:
-        _step3 = _step3[_step3["Tahun Anggaran"].astype(str) == sel_tahun_kegiatan]
+    if _step3 is not None and _live_tahun and "Tahun Anggaran" in _step3.columns:
+        _step3 = _step3[_step3["Tahun Anggaran"].astype(str).isin(_live_tahun)]
 
-    # --- Penyedia (dinamis) ---
+    # --- Penyedia (dinamis, multi-pilih) ---
     if _step3 is not None and "Penyedia" in _step3.columns:
         penyedia_options = sorted([
             p for p in _step3["Penyedia"].dropna().astype(str).str.strip().unique() if p and p.lower() != "nan"
         ])
-        sel_penyedia = st.multiselect("Penyedia", options=penyedia_options, default=[], placeholder="Semua Penyedia")
-    else:
-        sel_penyedia = []
+        st.multiselect("Penyedia", options=penyedia_options, key="w_penyedia", placeholder="Semua Penyedia")
+    _live_penyedia = st.session_state.get("w_penyedia", []) if (_step3 is not None and "Penyedia" in _step3.columns) else []
 
-    st.markdown("---")
-    if st.button("↺ Reset Filter"):
+    col_kf1, col_kf2 = st.columns(2)
+    with col_kf1:
+        filter_kegiatan_clicked = st.button("🔍 Filter", key="btn_filter_kegiatan", use_container_width=True)
+    with col_kf2:
+        reset_kegiatan_clicked = st.button("↺ Reset", key="btn_reset_kegiatan", use_container_width=True)
+
+    if filter_kegiatan_clicked:
+        st.session_state.kegiatan_applied = {
+            "target_key": _live_target_key,
+            "kelurahan": _live_kel_kegiatan,
+            "pekerjaan": _live_pekerjaan,
+            "tahun": _live_tahun,
+            "penyedia": _live_penyedia,
+        }
+        # Aktifkan HANYA layer yang dipilih di Filter Kegiatan, nonaktifkan layer lain
+        st.session_state.wilayah_applied["show_jaling"] = (_live_target_key == "Jaling")
+        st.session_state.wilayah_applied["show_draling"] = (_live_target_key == "Draling")
+        st.session_state.wilayah_applied["show_kawasan"] = (_live_target_key == "Kawasan")
+        st.session_state.wilayah_applied["show_rtlh"] = (_live_target_key == "RTLH")
+        # Sinkronkan checkbox Layer di Filter Wilayah pada run berikutnya (widget sudah dirender, jadi ditunda)
+        st.session_state["_isolate_layer_pending"] = _live_target_key
+        st.rerun()
+
+    if reset_kegiatan_clicked:
+        for k in ["w_layer_kegiatan", "w_kelurahan_kegiatan", "w_pekerjaan", "w_tahun_kegiatan", "w_penyedia"]:
+            if k in st.session_state:
+                del st.session_state[k]
+        st.session_state.kegiatan_applied = dict(KEGIATAN_DEFAULT)
         st.rerun()
 
 # ============================================================
 # TERAPKAN FILTER
 # ============================================================
 layer_visibility = {
-    "Jaling": show_jaling,
-    "Draling": show_draling,
-    "Kawasan": show_kawasan,
-    "RTLH": show_rtlh,
+    "Jaling": st.session_state.wilayah_applied["show_jaling"],
+    "Draling": st.session_state.wilayah_applied["show_draling"],
+    "Kawasan": st.session_state.wilayah_applied["show_kawasan"],
+    "RTLH": st.session_state.wilayah_applied["show_rtlh"],
 }
+show_jaling = layer_visibility["Jaling"]
+show_draling = layer_visibility["Draling"]
+show_kawasan = layer_visibility["Kawasan"]
+show_rtlh = layer_visibility["RTLH"]
 
 filtered_data = {}
 for name, gdf in data.items():
     if not layer_visibility.get(name, False):
         filtered_data[name] = gpd.GeoDataFrame()
         continue
-    wilayah_g = apply_wilayah_filter(gdf, kel_to_kec, selected_kecamatan, selected_kelurahan_wilayah)
-    if name == target_key:
+    wilayah_g = apply_wilayah_filter(
+        gdf, kel_to_kec,
+        st.session_state.wilayah_applied["kecamatan"], st.session_state.wilayah_applied["kelurahan"],
+    )
+    if name == st.session_state.kegiatan_applied["target_key"]:
         filtered_data[name] = apply_kegiatan_filter(
-            wilayah_g, sel_kelurahan_kegiatan, sel_pekerjaan, sel_tahun_kegiatan, sel_penyedia
+            wilayah_g,
+            st.session_state.kegiatan_applied["kelurahan"],
+            st.session_state.kegiatan_applied["pekerjaan"],
+            st.session_state.kegiatan_applied["tahun"],
+            st.session_state.kegiatan_applied["penyedia"],
         )
     else:
         filtered_data[name] = wilayah_g
@@ -745,18 +873,18 @@ with tab_peta:
         m.fit_bounds(fit_bounds, padding=(40, 40))
 
     # Basemap
-    folium.TileLayer("OpenStreetMap", name="OpenStreetMap", overlay=False, control=True).add_to(m)
-    folium.TileLayer("CartoDB positron", name="CartoDB Positron", overlay=False, control=True).add_to(m)
-    folium.TileLayer(tiles="https://mt1.google.com/vt/lyrs=m&x={x}&y={y}&z={z}", attr="Google", name="Google Streets", overlay=False, control=True).add_to(m)
-    folium.TileLayer(tiles="https://mt1.google.com/vt/lyrs=s&x={x}&y={y}&z={z}", attr="Google", name="Google Satellite", overlay=False, control=True).add_to(m)
-    folium.TileLayer(tiles="https://mt1.google.com/vt/lyrs=y&x={x}&y={y}&z={z}", attr="Google", name="Google Hybrid", overlay=False, control=True).add_to(m)
+    folium.TileLayer("OpenStreetMap", name="OpenStreetMap", overlay=False, control=True, show=True).add_to(m)
+    folium.TileLayer("CartoDB positron", name="CartoDB Positron", overlay=False, control=True, show=False).add_to(m)
+    folium.TileLayer(tiles="https://mt1.google.com/vt/lyrs=m&x={x}&y={y}&z={z}", attr="Google", name="Google Streets", overlay=False, control=True, show=False).add_to(m)
+    folium.TileLayer(tiles="https://mt1.google.com/vt/lyrs=s&x={x}&y={y}&z={z}", attr="Google", name="Google Satellite", overlay=False, control=True, show=False).add_to(m)
+    folium.TileLayer(tiles="https://mt1.google.com/vt/lyrs=y&x={x}&y={y}&z={z}", attr="Google", name="Google Hybrid", overlay=False, control=True, show=False).add_to(m)
 
     # Batas Kecamatan
     if len(admin.get("Kecamatan", [])) > 0:
         gdf_kec = admin["Kecamatan"]
         label_field = "Kecamatan" if "Kecamatan" in gdf_kec.columns else gdf_kec.columns[0]
         def style_kec(feature):
-            return {"color": "#111827", "weight": 5, "opacity": 0.8, "fillOpacity": 0, "dashArray": "12, 6, 2, 6"}
+            return {"color": "#111827", "weight": 2.5, "opacity": 0.9, "fillOpacity": 0, "dashArray": "12, 6, 2, 6"}
         fg_kec = folium.FeatureGroup(name="Batas Kecamatan", show=True)
         folium.GeoJson(gdf_kec.__geo_interface__, style_function=style_kec,
                        tooltip=folium.GeoJsonTooltip(fields=[label_field], aliases=["Kecamatan:"], sticky=True)).add_to(fg_kec)
@@ -773,7 +901,7 @@ with tab_peta:
         gdf_kel = admin["Kelurahan"]
         label_field = "Kelurahan" if "Kelurahan" in gdf_kel.columns else gdf_kel.columns[0]
         def style_kel(feature):
-            return {"color": "#4b5563", "weight": 3, "opacity": 0.6, "fillOpacity": 0, "dashArray": "10, 4, 2, 4, 2, 4, 2, 4"}
+            return {"color": "#4b5563", "weight": 1.5, "opacity": 0.85, "fillOpacity": 0, "dashArray": "10, 4, 2, 4, 2, 4, 2, 4"}
         fg_kel = folium.FeatureGroup(name="Batas Kelurahan", show=False)
         folium.GeoJson(gdf_kel.__geo_interface__, style_function=style_kel,
                        tooltip=folium.GeoJsonTooltip(fields=[label_field], aliases=["Kelurahan:"], sticky=True)).add_to(fg_kel)
@@ -960,7 +1088,7 @@ with tab_ringkasan:
     st.markdown("### Ringkasan Keseluruhan")
     m1, m2, m3, m4, m5 = st.columns(5)
     m1.metric("Total Kegiatan", summary["total_kegiatan"])
-    m2.metric("Total Panjang", f"{summary['total_panjang']:,.0f} m")
+    m2.metric("Total Panjang", f"{format_num(summary['total_panjang'])} m")
     m3.metric("Total Anggaran", format_rp(summary["total_anggaran"]))
     m4.metric("Kelurahan Terintervensi", summary["jumlah_kelurahan"])
     m5.metric("Penerima RTLH", summary["total_rtlh"])
@@ -990,7 +1118,7 @@ with tab_ringkasan:
         g = filtered_data["Jaling"]
         c1, c2, c3 = st.columns(3)
         c1.metric("Jumlah Ruas", len(g))
-        c2.metric("Total Panjang", f"{safe_sum(g['Panjang']) if 'Panjang' in g.columns else 0:,.0f} m")
+        c2.metric("Total Panjang", f"{format_num(safe_sum(g['Panjang']) if 'Panjang' in g.columns else 0)} m")
         c3.metric("Total Anggaran", format_rp(safe_sum(g["Harga"]) if "Harga" in g.columns else 0))
         ca, cb = st.columns(2)
         with ca:
@@ -1009,7 +1137,7 @@ with tab_ringkasan:
         g = filtered_data["Draling"]
         c1, c2, c3 = st.columns(3)
         c1.metric("Jumlah Ruas", len(g))
-        c2.metric("Total Panjang", f"{safe_sum(g['Panjang']) if 'Panjang' in g.columns else 0:,.0f} m")
+        c2.metric("Total Panjang", f"{format_num(safe_sum(g['Panjang']) if 'Panjang' in g.columns else 0)} m")
         c3.metric("Total Anggaran", format_rp(safe_sum(g["Harga"]) if "Harga" in g.columns else 0))
         ca, cb = st.columns(2)
         with ca:
